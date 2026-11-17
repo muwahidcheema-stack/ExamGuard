@@ -1,8 +1,85 @@
-﻿@{
-    ViewData["Title"] = "Home Page";
+﻿@model IEnumerable<ExamGuard.Models.Exam>
+@{
+    ViewData["Title"] = "Home";
 }
 
-<div class="text-center">
-    <h1 class="display-4">Welcome</h1>
-    <p>Learn about <a href="https://learn.microsoft.com/aspnet/core">building Web apps with ASP.NET Core</a>.</p>
+<div class="row align-items-center py-5">
+    <div class="col-lg-6">
+        <span class="badge bg-primary-subtle text-primary px-3 py-2 rounded-pill mb-3 fw-semibold">FCIT Invigilation Portal</span>
+        <h1 class="display-4 fw-bold text-dark mb-3">Seamless Invigilation & Duty Swapping</h1>
+        <p class="lead text-muted mb-4">ExamGuard streamlines department exam scheduling, TA/faculty duty assignments, and peer-to-peer invigilation duty swaps during exam series.</p>
+        <div class="d-flex gap-3">
+            @if (User.Identity != null && User.Identity.IsAuthenticated)
+            {
+                if (User.IsInRole("Admin"))
+                {
+                    <a asp-controller="Admin" asp-action="Index" class="btn btn-primary btn-lg px-4">Go to Admin Dashboard</a>
+                }
+                else
+                {
+                    <a asp-controller="Faculty" asp-action="Index" class="btn btn-primary btn-lg px-4">Go to My Timetable</a>
+                }
+            }
+            else
+            {
+                <a asp-controller="Account" asp-action="Login" class="btn btn-primary btn-lg px-4"><i class="bi bi-box-arrow-in-right me-2"></i>Login to Portal</a>
+                <a asp-controller="Account" asp-action="Register" class="btn btn-outline-secondary btn-lg px-4">Register Account</a>
+            }
+        </div>
+    </div>
+
+    <div class="col-lg-6 mt-5 mt-lg-0">
+        <div class="card card-custom p-4 bg-white shadow-sm">
+            <div class="d-flex align-items-center gap-3 mb-3">
+                <div class="bg-primary text-white p-3 rounded-3"><i class="bi bi-calendar-event fs-3"></i></div>
+                <div>
+                    <h5 class="mb-0 fw-bold">Active Semester Schedule</h5>
+                    <small class="text-muted">Live Published Examination Series</small>
+                </div>
+            </div>
+            <ul class="list-group list-group-flush border-top pt-2">
+                @if (!Model.Any())
+                {
+                    <li class="list-group-item text-muted small ps-0">No published exams scheduled yet.</li>
+                }
+                else
+                {
+                    foreach (var exam in Model)
+                    {
+                        <li class="list-group-item d-flex justify-content-between align-items-center ps-0">
+                            <div>
+                                <strong>@exam.CourseName (@exam.CourseCode)</strong><br>
+                                <small class="text-muted">@exam.Venue • @exam.ExamDate.ToString("MMM dd, yyyy") (@exam.StartTime - @exam.EndTime)</small>
+                            </div>
+                            <span class="badge bg-success">Published</span>
+                        </li>
+                    }
+                }
+            </ul>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mt-2">
+    <div class="col-md-4">
+        <div class="card card-custom p-4 h-100 bg-white">
+            <i class="bi bi-calendar-check text-primary fs-2 mb-3"></i>
+            <h5 class="fw-bold">Automated Scheduling</h5>
+            <p class="text-muted small">Department admins publish schedules and assign invigilation duties seamlessly.</p>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card card-custom p-4 h-100 bg-white">
+            <i class="bi bi-arrow-left-right text-primary fs-2 mb-3"></i>
+            <h5 class="fw-bold">Peer Duty Swapping</h5>
+            <p class="text-muted small">Faculty and TAs can initiate, accept, or reject duty swap requests with colleagues.</p>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card card-custom p-4 h-100 bg-white">
+            <i class="bi bi-journal-text text-primary fs-2 mb-3"></i>
+            <h5 class="fw-bold">Complete Audit Logs</h5>
+            <p class="text-muted small">Full tracking of past duties, swap history, and master department coverage logs.</p>
+        </div>
+    </div>
 </div>
