@@ -1,131 +1,105 @@
-﻿using ExamGuard.Data;
-using ExamGuard.Models;
+﻿using ExamGuard.Models;
+using ExamGuard.Repositories.Interfaces;
 using ExamGuard.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace ExamGuard.Controllers
 {
     [Authorize(Roles = "Faculty")]
     public class FacultyController : Controller
     {
-        private readonly ApplicationDbContext _context;
+        private readonly IDutyRepository _dutyRepo;
+        private readonly ISwapRepository _swapRepo;
+        private readonly IUserRepository _userRepo;
         private readonly UserManager<ApplicationUser> _userManager;
 
-        public FacultyController(ApplicationDbContext context, UserManager<ApplicationUser> userManager)
+        public FacultyController(
+            IDutyRepository dutyRepo,
+            ISwapRepository swapRepo,
+            IUserRepository userRepo,
+            UserManager<ApplicationUser> userManager)
         {
-            _context = context;
+            _dutyRepo = dutyRepo;
+            _swapRepo = swapRepo;
+            _userRepo = userRepo;
             _userManager = userManager;
         }
 
         public async Task<IActionResult> Index()
         {
-            var currentUser = await _userManager.GetUserAsync(User);
-            if (currentUser == null) return RedirectToAction("Login", "Account");
+            var userId = _userManager.GetUserId(User);
+            if (userId == null) return RedirectToAction("Login", "Account");
 
-            var allFaculty = await _userManager.GetUsersInRoleAsync("Faculty");
+            var currentUser = await _userRepo.GetUserByIdAsync(userId);
+            if (currentUser == null) return RedirectToAction("Login", "Account");
 
             var viewModel = new FacultyDashboardViewModel
             {
                 CurrentUser = currentUser,
-                MyDuties = await _context.InvigilationDuties
-                    .Include(d => d.Exam)
-                    .Where(d => d.AssignedUserId == currentUser.Id)
-                    .OrderBy(d => d.Exam!.ExamDate)
-                    .ToListAsync(),
-
-                IncomingSwaps = await _context.SwapRequests
-                    .Include(s => s.OriginalDuty)!.ThenInclude(d => d!.Exam)
-                    .Include(s => s.RequesterUser)
-                    .Where(s => s.TargetUserId == currentUser.Id && s.Status == "Pending")
-                    .ToListAsync(),
-
-                OpenSwapBoard = await _context.SwapRequests
-                    .Include(s => s.OriginalDuty)!.ThenInclude(d => d!.Exam)
-                    .Include(s => s.RequesterUser)
-                    .Where(s => s.TargetUserId == null && s.RequesterUserId != currentUser.Id && s.Status == "Pending")
-                    .ToListAsync(),
-
-                SwapHistory = await _context.SwapRequests
-                    .Include(s => s.OriginalDuty)!.ThenInclude(d => d!.Exam)
-                    .Include(s => s.RequesterUser)
-                    .Include(s => s.TargetUser)
-                    .Where(s => (s.RequesterUserId == currentUser.Id || s.TargetUserId == currentUser.Id) && s.Status != "Pending")
-                    .OrderByDescending(s => s.CreatedAt)
-                    .ToListAsync(),
-
-                Colleagues = allFaculty.Where(u => u.Id != currentUser.Id).ToList()
+                MyDuties = (await _dutyRepo.GetDutiesByUserIdAsync(userId)).ToList(),
+                IncomingSwaps = (await _swapRepo.GetIncomingSwapsForUserAsync(userId)).ToList(),
+                OpenSwapBoard = (await _swapRepo.GetOpenSwapBoardAsync(userId)).ToList(),
+                SwapHistory = (await _swapRepo.GetSwapHistoryForUserAsync(userId)).ToList(),
+                Colleagues = (await _userRepo.GetColleaguesAsync(userId)).ToList()
             };
 
             return View(viewModel);
         }
 
+        // $.ajax Endpoint: Submit Swap Request
         [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> RequestSwap(int OriginalDutyId, string SwapType, string? TargetUserId, string? Reason)
+        public async Task<IActionResult> RequestSwapAjax([FromForm] int OriginalDutyId, [FromForm] string SwapType, [FromForm] string? TargetUserId, [FromForm] string? Reason)
         {
-            var currentUser = await _userManager.GetUserAsync(User);
-            if (currentUser == null) return RedirectToAction("Login", "Account");
+            var userId = _userManager.GetUserId(User);
+            if (userId == null) return Json(new { success = false, message = "Unauthorized" });
 
-            var duty = await _context.InvigilationDuties.FindAsync(OriginalDutyId);
-            if (duty == null || duty.AssignedUserId != currentUser.Id)
-                return RedirectToAction(nameof(Index));
+            var duty = await _dutyRepo.GetDutyByIdAsync(OriginalDutyId);
+            if (duty == null || duty.AssignedUserId != userId)
+                return Json(new { success = false, message = "Duty not found." });
 
             var swapRequest = new SwapRequest
             {
                 OriginalDutyId = OriginalDutyId,
-                RequesterUserId = currentUser.Id,
+                RequesterUserId = userId,
                 TargetUserId = SwapType == "open" ? null : TargetUserId,
                 Reason = Reason,
                 Status = "Pending",
                 CreatedAt = DateTime.Now
             };
 
-            duty.Status = "SwapRequested";
-            _context.SwapRequests.Add(swapRequest);
-            await _context.SaveChangesAsync();
+            await _swapRepo.CreateSwapRequestAsync(swapRequest);
+            await _dutyRepo.UpdateDutyStatusAsync(OriginalDutyId, "SwapRequested");
 
-            return RedirectToAction(nameof(Index));
+            return Json(new { success = true, message = "Swap request sent successfully!" });
         }
 
+        // $.post Endpoint: Accept or Decline Swap
         [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> RespondSwap(int swapRequestId, string decision)
+        public async Task<IActionResult> RespondSwapAjax(int swapRequestId, string decision)
         {
-            var currentUser = await _userManager.GetUserAsync(User);
-            if (currentUser == null) return RedirectToAction("Login", "Account");
+            var userId = _userManager.GetUserId(User);
+            if (userId == null) return Json(new { success = false });
 
-            var swap = await _context.SwapRequests
-                .Include(s => s.OriginalDuty)
-                .FirstOrDefaultAsync(s => s.SwapRequestId == swapRequestId);
-
+            var swap = await _swapRepo.GetSwapByIdAsync(swapRequestId);
             if (swap == null || swap.Status != "Pending")
-                return RedirectToAction(nameof(Index));
+                return Json(new { success = false, message = "Swap request already processed." });
 
             if (decision == "Accept")
             {
-                swap.Status = "Accepted";
-                swap.TargetUserId = currentUser.Id;
-
-                if (swap.OriginalDuty != null)
-                {
-                    swap.OriginalDuty.AssignedUserId = currentUser.Id;
-                    swap.OriginalDuty.Status = "Assigned";
-                }
+                await _swapRepo.UpdateSwapStatusAsync(swapRequestId, "Accepted", userId);
+                await _dutyRepo.ReassignDutyAsync(swap.OriginalDutyId, userId, "Assigned");
+                return Json(new { success = true, message = "Duty swap accepted! Your timetable has been updated." });
             }
             else if (decision == "Decline")
             {
-                swap.Status = "Rejected";
-                if (swap.OriginalDuty != null)
-                {
-                    swap.OriginalDuty.Status = "Assigned";
-                }
+                await _swapRepo.UpdateSwapStatusAsync(swapRequestId, "Rejected");
+                await _dutyRepo.UpdateDutyStatusAsync(swap.OriginalDutyId, "Assigned");
+                return Json(new { success = true, message = "Swap request declined." });
             }
 
-            await _context.SaveChangesAsync();
-            return RedirectToAction(nameof(Index));
+            return Json(new { success = false });
         }
     }
 }

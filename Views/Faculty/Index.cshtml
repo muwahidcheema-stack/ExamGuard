@@ -3,6 +3,11 @@
     ViewData["Title"] = "Faculty / TA Dashboard";
 }
 
+<div id="facultyAlert" class="alert alert-success alert-dismissible fade show d-none small" role="alert">
+    <span id="facultyAlertText"></span>
+    <button type="button" class="btn-close" onclick="$('#facultyAlert').addClass('d-none')"></button>
+</div>
+
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h3 class="fw-bold mb-0">Welcome, @Model.CurrentUser.FullName</h3>
@@ -39,15 +44,13 @@
                     foreach (var duty in Model.MyDuties)
                     {
                         <tr>
-                            <td>
-                                <strong>@duty.Exam?.CourseCode - @duty.Exam?.CourseName</strong>
-                            </td>
+                            <td><strong>@duty.Exam?.CourseCode - @duty.Exam?.CourseName</strong></td>
                             <td>
                                 @duty.Exam?.ExamDate.ToString("MMM dd, yyyy")<br>
                                 <small class="text-muted">@duty.Exam?.StartTime - @duty.Exam?.EndTime</small>
                             </td>
                             <td><span class="badge bg-dark">@duty.Exam?.Venue</span></td>
-                            <td>
+                            <td id="status-cell-@duty.DutyId">
                                 @if (duty.Status == "SwapRequested")
                                 {
                                     <span class="badge badge-status-pending">Swap Requested</span>
@@ -57,7 +60,7 @@
                                     <span class="badge badge-status-assigned">Confirmed</span>
                                 }
                             </td>
-                            <td>
+                            <td id="action-cell-@duty.DutyId">
                                 @if (duty.Status == "Assigned")
                                 {
                                     <button class="btn btn-sm btn-warning"
@@ -96,7 +99,7 @@
                 {
                     foreach (var swap in Model.IncomingSwaps)
                     {
-                        <div class="border rounded p-3 mb-3">
+                        <div class="border rounded p-3 mb-3" id="swap-card-@swap.SwapRequestId">
                             <div class="d-flex justify-content-between">
                                 <strong>@swap.RequesterUser?.FullName</strong>
                                 <small class="text-muted">@swap.CreatedAt.ToString("MMM dd, hh:mm tt")</small>
@@ -110,16 +113,8 @@
                                 <p class="small fst-italic text-secondary mb-2">"@swap.Reason"</p>
                             }
                             <div class="d-flex gap-2">
-                                <form asp-action="RespondSwap" method="post" class="d-inline">
-                                    <input type="hidden" name="swapRequestId" value="@swap.SwapRequestId" />
-                                    <input type="hidden" name="decision" value="Accept" />
-                                    <button type="submit" class="btn btn-sm btn-success px-3">Accept Swap</button>
-                                </form>
-                                <form asp-action="RespondSwap" method="post" class="d-inline">
-                                    <input type="hidden" name="swapRequestId" value="@swap.SwapRequestId" />
-                                    <input type="hidden" name="decision" value="Decline" />
-                                    <button type="submit" class="btn btn-sm btn-outline-danger px-3">Decline</button>
-                                </form>
+                                <button type="button" onclick="respondSwap(@swap.SwapRequestId, 'Accept')" class="btn btn-sm btn-success px-3">Accept Swap</button>
+                                <button type="button" onclick="respondSwap(@swap.SwapRequestId, 'Decline')" class="btn btn-sm btn-outline-danger px-3">Decline</button>
                             </div>
                         </div>
                     }
@@ -145,7 +140,7 @@
                         {
                             <li class="list-group-item d-flex justify-content-between align-items-center">
                                 <div>
-                                    <small class="fw-bold">@hist.OriginalDuty?.Exam?.CourseName (@hist.RequesterUser?.FullName &rarr; @(hist.TargetUser?.FullName ?? "Open"))</small><br>
+                                    <small class="fw-bold">@hist.OriginalDuty?.Exam?.CourseName (@hist.RequesterUser?.FullName)</small><br>
                                     <small class="text-muted">@hist.CreatedAt.ToString("MMM dd, yyyy")</small>
                                 </div>
                                 <span class="badge @(hist.Status == "Accepted" ? "bg-success" : "bg-danger")">@hist.Status</span>
@@ -158,11 +153,11 @@
     </div>
 </div>
 
-<!-- Request Duty Swap Modal -->
+<!-- Request Duty Swap Modal (Submitted via $.ajax) -->
 <div class="modal fade" id="requestSwapModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form asp-action="RequestSwap" method="post">
+            <form id="requestSwapForm">
                 <div class="modal-header">
                     <h5 class="modal-title fw-bold">Initiate Duty Swap</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -220,17 +215,13 @@
                     {
                         foreach (var openSwap in Model.OpenSwapBoard)
                         {
-                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div class="list-group-item d-flex justify-content-between align-items-center" id="open-swap-@openSwap.SwapRequestId">
                                 <div>
                                     <strong>@openSwap.OriginalDuty?.Exam?.CourseName (@openSwap.OriginalDuty?.Exam?.CourseCode)</strong>
                                     • @openSwap.OriginalDuty?.Exam?.ExamDate.ToString("MMM dd") (@openSwap.OriginalDuty?.Exam?.StartTime)<br>
                                     <small class="text-muted">Posted by: @openSwap.RequesterUser?.FullName • Venue: @openSwap.OriginalDuty?.Exam?.Venue</small>
                                 </div>
-                                <form asp-action="RespondSwap" method="post">
-                                    <input type="hidden" name="swapRequestId" value="@openSwap.SwapRequestId" />
-                                    <input type="hidden" name="decision" value="Accept" />
-                                    <button type="submit" class="btn btn-sm btn-outline-success">Claim Duty</button>
-                                </form>
+                                <button type="button" onclick="respondSwap(@openSwap.SwapRequestId, 'Accept')" class="btn btn-sm btn-outline-success">Claim Duty</button>
                             </div>
                         }
                     }
@@ -243,12 +234,52 @@
 @section Scripts {
     <script>
         function openSwapModal(dutyId, courseTitle) {
-            document.getElementById('modalDutyId').value = dutyId;
-            document.getElementById('modalCourseTitle').innerText = courseTitle;
+            $('#modalDutyId').val(dutyId);
+            $('#modalCourseTitle').text(courseTitle);
         }
+
         function toggleColleagueSelect() {
-            const type = document.getElementById('swapTypeSelect').value;
-            document.getElementById('colleagueDiv').style.display = (type === 'open') ? 'none' : 'block';
+            const type = $('#swapTypeSelect').val();
+            $('#colleagueDiv').toggle(type !== 'open');
+        }
+
+        // $.ajax - Submit Swap Request
+        $('#requestSwapForm').on('submit', function (e) {
+            e.preventDefault();
+            const dutyId = $('#modalDutyId').val();
+
+            $.ajax({
+                type: 'POST',
+                url: '/Faculty/RequestSwapAjax',
+                data: $(this).serialize(),
+                success: function (res) {
+                    if (res.success) {
+                        $('#requestSwapModal').modal('hide');
+                        $(`#status-cell-${dutyId}`).html('<span class="badge badge-status-pending">Swap Requested</span>');
+                        $(`#action-cell-${dutyId}`).html('<button class="btn btn-sm btn-outline-secondary" disabled>Swap Pending...</button>');
+                        $('#facultyAlertText').text(res.message);
+                        $('#facultyAlert').removeClass('d-none');
+                    } else {
+                        alert(res.message);
+                    }
+                }
+            });
+        });
+
+        // $.post - Accept or Decline Swap
+        function respondSwap(swapRequestId, decision) {
+            $.post('/Faculty/RespondSwapAjax', { swapRequestId: swapRequestId, decision: decision }, function (res) {
+                if (res.success) {
+                    $(`#swap-card-${swapRequestId}`).fadeOut(300, function () { $(this).remove(); });
+                    $(`#open-swap-${swapRequestId}`).fadeOut(300, function () { $(this).remove(); });
+                    $('#facultyAlertText').text(res.message);
+                    $('#facultyAlert').removeClass('d-none');
+
+                    if (decision === 'Accept') {
+                        setTimeout(() => location.reload(), 1200);
+                    }
+                }
+            });
         }
     </script>
 }

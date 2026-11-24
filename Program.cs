@@ -31,6 +31,11 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.AccessDeniedPath = "/Account/AccessDenied";
 });
 
+// Register Dapper Repositories for Dependency Injection
+builder.Services.AddScoped<ExamGuard.Repositories.Interfaces.IExamRepository, ExamGuard.Repositories.ExamRepository>();
+builder.Services.AddScoped<ExamGuard.Repositories.Interfaces.IDutyRepository, ExamGuard.Repositories.DutyRepository>();
+builder.Services.AddScoped<ExamGuard.Repositories.Interfaces.ISwapRepository, ExamGuard.Repositories.SwapRepository>();
+builder.Services.AddScoped<ExamGuard.Repositories.Interfaces.IUserRepository, ExamGuard.Repositories.UserRepository>();
 builder.Services.AddControllersWithViews();
 
 var app = builder.Build();

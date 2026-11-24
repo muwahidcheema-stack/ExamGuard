@@ -1,57 +1,75 @@
-﻿using ExamGuard.Data;
-using ExamGuard.Models;
+﻿using ExamGuard.Models;
+using ExamGuard.Repositories.Interfaces;
 using ExamGuard.ViewModels;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace ExamGuard.Controllers
 {
     [Authorize(Roles = "Admin")]
     public class AdminController : Controller
     {
-        private readonly ApplicationDbContext _context;
-        private readonly UserManager<ApplicationUser> _userManager;
+        private readonly IExamRepository _examRepo;
+        private readonly IDutyRepository _dutyRepo;
+        private readonly ISwapRepository _swapRepo;
+        private readonly IUserRepository _userRepo;
 
-        public AdminController(ApplicationDbContext context, UserManager<ApplicationUser> userManager)
+        public AdminController(
+            IExamRepository examRepo,
+            IDutyRepository dutyRepo,
+            ISwapRepository swapRepo,
+            IUserRepository userRepo)
         {
-            _context = context;
-            _userManager = userManager;
+            _examRepo = examRepo;
+            _dutyRepo = dutyRepo;
+            _swapRepo = swapRepo;
+            _userRepo = userRepo;
         }
 
         public async Task<IActionResult> Index()
         {
-            var staffUsers = await _userManager.GetUsersInRoleAsync("Faculty");
-
             var viewModel = new AdminDashboardViewModel
             {
-                TotalExams = await _context.Exams.CountAsync(),
-                TotalDuties = await _context.InvigilationDuties.CountAsync(),
-                PendingSwaps = await _context.SwapRequests.CountAsync(s => s.Status == "Pending"),
-                Duties = await _context.InvigilationDuties
-                    .Include(d => d.Exam)
-                    .Include(d => d.AssignedUser)
-                    .OrderBy(d => d.Exam!.ExamDate)
-                    .ToListAsync(),
-                StaffMembers = staffUsers.ToList(),
-                AllSwapRequests = await _context.SwapRequests
-                    .Include(s => s.OriginalDuty)!.ThenInclude(d => d!.Exam)
-                    .Include(s => s.RequesterUser)
-                    .Include(s => s.TargetUser)
-                    .Where(s => s.Status == "Pending")
-                    .ToListAsync()
+                TotalExams = await _examRepo.GetTotalExamsCountAsync(),
+                TotalDuties = await _dutyRepo.GetTotalDutiesCountAsync(),
+                PendingSwaps = await _swapRepo.GetPendingSwapsCountAsync(),
+                Duties = (await _dutyRepo.GetAllDutiesWithDetailsAsync()).ToList(),
+                StaffMembers = (await _userRepo.GetAllFacultyAndTAsAsync()).ToList(),
+                AllSwapRequests = (await _swapRepo.GetAllPendingSwapsAsync()).ToList()
             };
 
             return View(viewModel);
         }
 
+        // 1. $.get Endpoint: Live Search Filter
+        [HttpGet]
+        public async Task<IActionResult> SearchDuties(string? query)
+        {
+            var duties = await _dutyRepo.GetAllDutiesWithDetailsAsync(query);
+            var result = duties.Select(d => new
+            {
+                dutyId = d.DutyId,
+                examId = d.ExamId,
+                courseCode = d.Exam?.CourseCode,
+                courseName = d.Exam?.CourseName,
+                examDate = d.Exam?.ExamDate.ToString("MMM dd, yyyy"),
+                timeSlot = $"{d.Exam?.StartTime} - {d.Exam?.EndTime}",
+                venue = d.Exam?.Venue,
+                isPublished = d.Exam?.IsPublished ?? false,
+                assignedUserName = d.AssignedUser?.FullName,
+                rollNo = d.AssignedUser?.EmployeeOrRollNumber,
+                status = d.Status
+            });
+
+            return Json(result);
+        }
+
+        // 2. $.ajax Endpoint: Create Exam & Assign Duty
         [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> CreateExamAndDuty(string CourseName, string CourseCode, DateTime ExamDate, string StartTime, string EndTime, string Venue, string AssignedUserId)
+        public async Task<IActionResult> CreateExamAjax([FromForm] string CourseName, [FromForm] string CourseCode, [FromForm] DateTime ExamDate, [FromForm] string StartTime, [FromForm] string EndTime, [FromForm] string Venue, [FromForm] string AssignedUserId)
         {
             if (string.IsNullOrWhiteSpace(CourseName) || string.IsNullOrWhiteSpace(AssignedUserId))
-                return RedirectToAction(nameof(Index));
+                return Json(new { success = false, message = "Please fill in all required fields." });
 
             var exam = new Exam
             {
@@ -64,51 +82,47 @@ namespace ExamGuard.Controllers
                 IsPublished = true
             };
 
-            _context.Exams.Add(exam);
-            await _context.SaveChangesAsync();
+            int newExamId = await _examRepo.CreateExamAsync(exam);
 
             var duty = new InvigilationDuty
             {
-                ExamId = exam.ExamId,
+                ExamId = newExamId,
                 AssignedUserId = AssignedUserId,
                 Status = "Assigned"
             };
 
-            _context.InvigilationDuties.Add(duty);
-            await _context.SaveChangesAsync();
+            await _dutyRepo.CreateDutyAsync(duty);
+            return Json(new { success = true, message = "Exam slot created and assigned!" });
+        }
 
-            return RedirectToAction(nameof(Index));
+        // 3. $.post Endpoint: Toggle Publish Status
+        [HttpPost]
+        public async Task<IActionResult> TogglePublishAjax(int examId)
+        {
+            await _examRepo.TogglePublishStatusAsync(examId);
+            return Json(new { success = true });
+        }
+
+        // 4. $.post Endpoint: Delete Duty
+        [HttpPost]
+        public async Task<IActionResult> DeleteDutyAjax(int dutyId)
+        {
+            var duty = await _dutyRepo.GetDutyByIdAsync(dutyId);
+            if (duty != null)
+            {
+                await _swapRepo.DeleteSwapsByDutyIdAsync(dutyId);
+                await _dutyRepo.DeleteDutyAsync(dutyId);
+                await _examRepo.DeleteExamAsync(duty.ExamId);
+                return Json(new { success = true });
+            }
+            return Json(new { success = false });
         }
 
         [HttpPost]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> PublishAll()
         {
-            var unpublished = await _context.Exams.Where(e => !e.IsPublished).ToListAsync();
-            foreach (var exam in unpublished)
-            {
-                exam.IsPublished = true;
-            }
-            await _context.SaveChangesAsync();
-            return RedirectToAction(nameof(Index));
-        }
-
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> DeleteDuty(int dutyId)
-        {
-            var duty = await _context.InvigilationDuties.Include(d => d.Exam).FirstOrDefaultAsync(d => d.DutyId == dutyId);
-            if (duty != null)
-            {
-                var relatedSwaps = _context.SwapRequests.Where(s => s.OriginalDutyId == dutyId || s.TargetDutyId == dutyId);
-                _context.SwapRequests.RemoveRange(relatedSwaps);
-                _context.InvigilationDuties.Remove(duty);
-                if (duty.Exam != null)
-                {
-                    _context.Exams.Remove(duty.Exam);
-                }
-                await _context.SaveChangesAsync();
-            }
+            await _examRepo.PublishAllAsync();
             return RedirectToAction(nameof(Index));
         }
     }

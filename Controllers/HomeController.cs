@@ -1,26 +1,20 @@
-using ExamGuard.Data;
+using ExamGuard.Repositories.Interfaces;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace ExamGuard.Controllers
 {
     public class HomeController : Controller
     {
-        private readonly ApplicationDbContext _context;
+        private readonly IExamRepository _examRepo;
 
-        public HomeController(ApplicationDbContext context)
+        public HomeController(IExamRepository examRepo)
         {
-            _context = context;
+            _examRepo = examRepo;
         }
 
         public async Task<IActionResult> Index()
         {
-            var publishedExams = await _context.Exams
-                .Where(e => e.IsPublished)
-                .OrderBy(e => e.ExamDate)
-                .Take(5)
-                .ToListAsync();
-
+            var publishedExams = await _examRepo.GetPublishedExamsAsync(5);
             return View(publishedExams);
         }
     }

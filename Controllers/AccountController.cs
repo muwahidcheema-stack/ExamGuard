@@ -1,5 +1,6 @@
 ﻿using ExamGuard.Models;
 using ExamGuard.ViewModels;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 
@@ -80,6 +81,56 @@ namespace ExamGuard.Controllers
                 await _userManager.AddToRoleAsync(user, "Faculty");
                 await _signInManager.SignInAsync(user, isPersistent: false);
                 return RedirectToAction("Index", "Faculty");
+            }
+
+            foreach (var error in result.Errors)
+            {
+                ModelState.AddModelError(string.Empty, error.Description);
+            }
+
+            return View(model);
+        }
+
+        // GET: /Account/Profile
+        [Authorize]
+        [HttpGet]
+        public async Task<IActionResult> Profile()
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return RedirectToAction("Login");
+
+            var model = new ProfileViewModel
+            {
+                FullName = user.FullName,
+                EmployeeOrRollNumber = user.EmployeeOrRollNumber,
+                Department = user.Department,
+                Email = user.Email ?? string.Empty
+            };
+
+            return View(model);
+        }
+
+        // POST: /Account/Profile
+        [Authorize]
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> Profile(ProfileViewModel model)
+        {
+            if (!ModelState.IsValid)
+                return View(model);
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return RedirectToAction("Login");
+
+            user.FullName = model.FullName;
+            user.EmployeeOrRollNumber = model.EmployeeOrRollNumber;
+            user.Department = model.Department;
+
+            var result = await _userManager.UpdateAsync(user);
+            if (result.Succeeded)
+            {
+                TempData["SuccessMessage"] = "Profile updated successfully!";
+                return RedirectToAction(nameof(Profile));
             }
 
             foreach (var error in result.Errors)

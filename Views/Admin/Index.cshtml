@@ -3,6 +3,11 @@
     ViewData["Title"] = "Admin Dashboard";
 }
 
+<div id="ajaxAlert" class="alert alert-success alert-dismissible fade show d-none small" role="alert">
+    <span id="ajaxAlertText"></span>
+    <button type="button" class="btn-close" onclick="$('#ajaxAlert').addClass('d-none')"></button>
+</div>
+
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h3 class="fw-bold mb-0">Department Admin Dashboard</h3>
@@ -13,12 +18,12 @@
             <i class="bi bi-plus-lg me-1"></i>New Exam Slot
         </button>
         <form asp-action="PublishAll" method="post" class="d-inline">
-            <button type="submit" class="btn btn-outline-success"><i class="bi bi-send me-1"></i>Publish Roster</button>
+            <button type="submit" class="btn btn-outline-success"><i class="bi bi-send me-1"></i>Publish All</button>
         </form>
     </div>
 </div>
 
-<!-- Dynamic Stats Cards -->
+<!-- Stats Cards -->
 <div class="row g-3 mb-4">
     <div class="col-md-3">
         <div class="card card-custom p-3 bg-white">
@@ -50,10 +55,14 @@
     </div>
 </div>
 
-<!-- Master Duty Assignment Table -->
+<!-- Master Duty Assignment Table with $.get Live Search -->
 <div class="card card-custom bg-white mb-4">
-    <div class="card-header bg-white py-3">
+    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
         <h5 class="fw-bold mb-0">Master Exam Schedule & Duty Allocations</h5>
+        <div class="input-group input-group-sm w-25">
+            <span class="input-group-text bg-light"><i class="bi bi-search"></i></span>
+            <input type="text" id="liveSearchInput" class="form-control" placeholder="Live search ($.get)...">
+        </div>
     </div>
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
@@ -63,20 +72,21 @@
                     <th>Date & Time</th>
                     <th>Venue</th>
                     <th>Assigned Invigilator</th>
-                    <th>Status</th>
+                    <th>Visibility</th>
+                    <th>Duty Status</th>
                     <th>Actions</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="dutiesTableBody">
                 @if (!Model.Duties.Any())
                 {
-                    <tr><td colspan="6" class="text-center text-muted py-4">No exam duties scheduled yet. Click "New Exam Slot" to add one.</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-4">No exam duties scheduled yet.</td></tr>
                 }
                 else
                 {
                     foreach (var duty in Model.Duties)
                     {
-                        <tr>
+                        <tr id="duty-row-@duty.DutyId">
                             <td><strong>@duty.Exam?.CourseCode</strong> - @duty.Exam?.CourseName</td>
                             <td>
                                 @duty.Exam?.ExamDate.ToString("MMM dd, yyyy")<br>
@@ -84,6 +94,12 @@
                             </td>
                             <td><span class="badge bg-secondary">@duty.Exam?.Venue</span></td>
                             <td>@duty.AssignedUser?.FullName <small class="text-muted">(@duty.AssignedUser?.EmployeeOrRollNumber)</small></td>
+                            <td>
+                                <button type="button" onclick="togglePublish(@duty.ExamId, this)"
+                                        class="btn btn-sm @(duty.Exam?.IsPublished == true ? "btn-success" : "btn-outline-secondary")">
+                                    @(duty.Exam?.IsPublished == true ? "Published" : "Unpublished")
+                                </button>
+                            </td>
                             <td>
                                 @if (duty.Status == "SwapRequested")
                                 {
@@ -95,10 +111,9 @@
                                 }
                             </td>
                             <td>
-                                <form asp-action="DeleteDuty" method="post" class="d-inline" onsubmit="return confirm('Delete this exam slot?');">
-                                    <input type="hidden" name="dutyId" value="@duty.DutyId" />
-                                    <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
-                                </form>
+                                <button type="button" onclick="deleteDuty(@duty.DutyId)" class="btn btn-sm btn-outline-danger">
+                                    <i class="bi bi-trash"></i>
+                                </button>
                             </td>
                         </tr>
                     }
@@ -108,11 +123,11 @@
     </div>
 </div>
 
-<!-- Create Exam Modal -->
+<!-- Create Exam Modal (Submitted via $.ajax) -->
 <div class="modal fade" id="createExamModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form asp-action="CreateExamAndDuty" method="post">
+            <form id="createExamForm">
                 <div class="modal-header">
                     <h5 class="modal-title fw-bold">Schedule New Exam Duty</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -165,3 +180,96 @@
         </div>
     </div>
 </div>
+
+@section Scripts {
+    <script>
+        function showBanner(msg) {
+            $('#ajaxAlertText').text(msg);
+            $('#ajaxAlert').removeClass('d-none');
+        }
+
+        // 1. $.get - Live Search Table
+        $('#liveSearchInput').on('keyup', function () {
+            const term = $(this).val();
+            $.get('/Admin/SearchDuties', { query: term }, function (data) {
+                const tbody = $('#dutiesTableBody');
+                tbody.empty();
+
+                if (data.length === 0) {
+                    tbody.append('<tr><td colspan="7" class="text-center text-muted py-4">No matching records found.</td></tr>');
+                    return;
+                }
+
+                data.forEach(item => {
+                    const pubBtnClass = item.isPublished ? 'btn-success' : 'btn-outline-secondary';
+                    const pubText = item.isPublished ? 'Published' : 'Unpublished';
+                    const statusBadge = item.status === 'SwapRequested'
+                        ? '<span class="badge badge-status-pending">Swap Pending</span>'
+                        : `<span class="badge badge-status-assigned">${item.status}</span>`;
+
+                    tbody.append(`
+                        <tr id="duty-row-${item.dutyId}">
+                            <td><strong>${item.courseCode}</strong> - ${item.courseName}</td>
+                            <td>${item.examDate}<br><small class="text-muted">${item.timeSlot}</small></td>
+                            <td><span class="badge bg-secondary">${item.venue}</span></td>
+                            <td>${item.assignedUserName} <small class="text-muted">(${item.rollNo})</small></td>
+                            <td>
+                                <button type="button" onclick="togglePublish(${item.examId}, this)" class="btn btn-sm ${pubBtnClass}">${pubText}</button>
+                            </td>
+                            <td>${statusBadge}</td>
+                            <td>
+                                <button type="button" onclick="deleteDuty(${item.dutyId})" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                            </td>
+                        </tr>
+                    `);
+                });
+            });
+        });
+
+        // 2. $.ajax - Create Exam & Assign Duty
+        $('#createExamForm').on('submit', function (e) {
+            e.preventDefault();
+            $.ajax({
+                type: 'POST',
+                url: '/Admin/CreateExamAjax',
+                data: $(this).serialize(),
+                success: function (res) {
+                    if (res.success) {
+                        $('#createExamModal').modal('hide');
+                        $('#createExamForm')[0].reset();
+                        showBanner(res.message);
+                        $('#liveSearchInput').trigger('keyup'); // Refresh table via $.get
+                    } else {
+                        alert(res.message);
+                    }
+                }
+            });
+        });
+
+        // 3. $.post - Toggle Publish Status
+        function togglePublish(examId, btn) {
+            $.post('/Admin/TogglePublishAjax', { examId: examId }, function (res) {
+                if (res.success) {
+                    const $btn = $(btn);
+                    if ($btn.hasClass('btn-success')) {
+                        $btn.removeClass('btn-success').addClass('btn-outline-secondary').text('Unpublished');
+                    } else {
+                        $btn.removeClass('btn-outline-secondary').addClass('btn-success').text('Published');
+                    }
+                    showBanner('Exam publish visibility updated!');
+                }
+            });
+        }
+
+        // 4. $.post - Delete Duty Row
+        function deleteDuty(dutyId) {
+            if (!confirm('Delete this exam slot?')) return;
+            $.post('/Admin/DeleteDutyAjax', { dutyId: dutyId }, function (res) {
+                if (res.success) {
+                    $(`#duty-row-${dutyId}`).fadeOut(300, function () { $(this).remove(); });
+                    showBanner('Exam slot deleted.');
+                }
+            });
+        }
+    </script>
+}
